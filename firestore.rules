@@ -1,0 +1,180 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- REUSABLE UTILITIES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- ENTITY SPECIFIC SCHEMAS ---
+
+    function isValidImage(data) {
+      return data.id is string
+        && data.id.size() <= 128
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 256
+        && data.originalName is string
+        && data.originalName.size() > 0
+        && data.originalName.size() <= 256
+        && data.url is string
+        && data.url.size() > 0
+        && data.url.size() <= 1024
+        && data.githubPath is string
+        && data.githubPath.size() > 0
+        && data.githubPath.size() <= 1024
+        && data.folder is string
+        && data.folder.size() <= 128
+        && data.size is int
+        && data.size > 0
+        && data.size <= 50000000
+        && data.width is int
+        && data.width > 0
+        && data.width <= 15000
+        && data.height is int
+        && data.height > 0
+        && data.height <= 15000
+        && data.format is string
+        && data.format.size() <= 32
+        && data.uploadedBy is string
+        && data.uploadedBy == request.auth.uid
+        && (!('tags' in data) || data.tags is list)
+        && (!('sha' in data) || (data.sha is string && data.sha.size() <= 128));
+    }
+
+    function isValidFolder(data) {
+      return data.id is string
+        && data.id.size() <= 128
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 128
+        && data.createdBy is string
+        && data.createdBy == request.auth.uid;
+    }
+
+    function isValidSettings(data) {
+      return data.userId is string
+        && data.userId == request.auth.uid
+        && data.githubToken is string
+        && data.githubToken.size() > 0
+        && data.githubToken.size() <= 512
+        && data.githubRepo is string
+        && data.githubRepo.size() > 0
+        && data.githubRepo.size() <= 256
+        && data.githubOwner is string
+        && data.githubOwner.size() > 0
+        && data.githubOwner.size() <= 256
+        && data.githubBranch is string
+        && data.githubBranch.size() > 0
+        && data.githubBranch.size() <= 128
+        && data.cdnMode is string
+        && data.cdnMode.size() > 0
+        && data.cdnMode.size() <= 128
+        && data.imageQuality is int
+        && data.imageQuality >= 1
+        && data.imageQuality <= 100
+        && data.useAiTagging is bool;
+    }
+
+    // --- COLLECTION RULES ---
+
+    // 1. Images collection
+    match /images/{imageId} {
+      allow get: if isSignedIn() && isOwner(existing().uploadedBy);
+      
+      allow list: if isSignedIn() 
+        && resource.data.uploadedBy == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidId(imageId)
+        && isValidImage(incoming())
+        && incoming().uploadedAt is string
+        && incoming().keys().hasAll(['id', 'name', 'originalName', 'url', 'githubPath', 'folder', 'size', 'width', 'height', 'format', 'uploadedBy', 'uploadedAt'])
+        && incoming().keys().size() >= 12
+        && incoming().keys().size() <= 14;
+
+      allow update: if isSignedIn()
+        && isOwner(existing().uploadedBy)
+        && isValidImage(incoming())
+        && incoming().uploadedAt == existing().uploadedAt
+        && incoming().uploadedBy == existing().uploadedBy
+        && incoming().githubPath == existing().githubPath
+        && incoming().url == existing().url
+        && (
+          // Action: Rename or Move folder
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folder'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folder', 'tags'])
+        );
+
+      allow delete: if isSignedIn() && isOwner(existing().uploadedBy);
+    }
+
+    // 2. Folders collection
+    match /folders/{folderId} {
+      allow get: if isSignedIn() && isOwner(existing().createdBy);
+      
+      allow list: if isSignedIn()
+        && resource.data.createdBy == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidId(folderId)
+        && isValidFolder(incoming())
+        && incoming().createdAt is string
+        && incoming().keys().hasAll(['id', 'name', 'createdBy', 'createdAt'])
+        && incoming().keys().size() == 4;
+
+      allow update: if isSignedIn()
+        && isOwner(existing().createdBy)
+        && isValidFolder(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdBy == existing().createdBy
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name']);
+
+      allow delete: if isSignedIn() && isOwner(existing().createdBy);
+    }
+
+    // 3. Settings collection
+    match /settings/{userId} {
+      allow get: if isSignedIn() && userId == request.auth.uid;
+      allow list: if false; // List queries are blocked entirely
+
+      allow create: if isSignedIn()
+        && userId == request.auth.uid
+        && isValidSettings(incoming())
+        && incoming().keys().hasAll(['userId', 'githubToken', 'githubRepo', 'githubOwner', 'githubBranch', 'cdnMode', 'imageQuality', 'useAiTagging'])
+        && incoming().keys().size() == 8;
+
+      allow update: if isSignedIn()
+        && userId == request.auth.uid
+        && isValidSettings(incoming())
+        && incoming().userId == existing().userId
+        && (
+          incoming().diff(existing()).affectedKeys().hasAny(['githubToken', 'githubRepo', 'githubOwner', 'githubBranch', 'cdnMode', 'imageQuality', 'useAiTagging'])
+        );
+
+      allow delete: if isSignedIn() && userId == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "GitCDN",
+  "description": "A lightweight cloud image infrastructure powered by GitHub, jsDelivr, and Firebase",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
